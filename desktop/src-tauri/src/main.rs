@@ -12,6 +12,8 @@ use tauri::{
     AppHandle, Manager, RunEvent,
 };
 
+use crate::ble::server::{create_gatt_server, generate_pairing_pin, BleEvent};
+
 /// Shared global daemon state accessible across Tauri commands and the tray menu
 #[derive(Debug, Clone)]
 pub struct DaemonState {
@@ -60,7 +62,9 @@ impl Default for DaemonState {
     }
 }
 
-/// Tauri command: Get current daemon state as JSON (called from settings UI)
+// ── Tauri commands ────────────────────────────────────────────────────────────
+
+/// Get current daemon state as JSON (called from settings UI)
 #[tauri::command]
 fn get_daemon_state(state: tauri::State<Arc<Mutex<DaemonState>>>) -> serde_json::Value {
     let s = state.lock().unwrap();
@@ -72,28 +76,26 @@ fn get_daemon_state(state: tauri::State<Arc<Mutex<DaemonState>>>) -> serde_json:
     })
 }
 
-/// Build the system tray menu from current daemon state
+// ── Tray menu builder ─────────────────────────────────────────────────────────
+
 fn build_tray_menu(app: &AppHandle, state: &DaemonState) -> tauri::Result<Menu<tauri::Wry>> {
     let status_item = MenuItem::with_id(
         app, "status", state.connection_status.label(), false, None::<&str>,
     )?;
-
     let device_label = match &state.paired_device_id {
         Some(id) => format!("Device: {}", id),
         None => "Device: None paired".to_string(),
     };
     let device_item = MenuItem::with_id(app, "device", &device_label, false, None::<&str>)?;
-
     let pin_label = match &state.pairing_pin {
         Some(pin) => format!("Pairing PIN: {}", pin),
         None => "Pairing PIN: —".to_string(),
     };
-    let pin_item = MenuItem::with_id(app, "pin", &pin_label, false, None::<&str>)?;
-
-    let sep1 = tauri::menu::PredefinedMenuItem::separator(app)?;
+    let pin_item    = MenuItem::with_id(app, "pin", &pin_label, false, None::<&str>)?;
+    let sep1        = tauri::menu::PredefinedMenuItem::separator(app)?;
     let open_settings = MenuItem::with_id(app, "settings", "Open Settings...", true, None::<&str>)?;
-    let sep2 = tauri::menu::PredefinedMenuItem::separator(app)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit OpenDeck", true, None::<&str>)?;
+    let sep2        = tauri::menu::PredefinedMenuItem::separator(app)?;
+    let quit_item   = MenuItem::with_id(app, "quit", "Quit OpenDeck", true, None::<&str>)?;
 
     Menu::with_items(app, &[
         &status_item,
@@ -106,9 +108,59 @@ fn build_tray_menu(app: &AppHandle, state: &DaemonState) -> tauri::Result<Menu<t
     ])
 }
 
+// ── BLE event loop ────────────────────────────────────────────────────────────
+
+/// Spawns a Tokio task that drains the BLE event channel and updates DaemonState
+fn start_ble_event_loop(
+    mut rx: crate::ble::server::BleReceiver,
+    shared_state: Arc<Mutex<DaemonState>>,
+) {
+    tokio::spawn(async move {
+        log::info!("[BLE] Event loop started.");
+        while let Some(event) = rx.recv().await {
+            let mut state = shared_state.lock().unwrap();
+            match event {
+                BleEvent::PoweredOn => {
+                    state.connection_status = ConnectionStatus::Advertising;
+                    state.pairing_pin = Some(generate_pairing_pin());
+                    log::info!("[BLE] Advertising. PIN: {}", state.pairing_pin.as_deref().unwrap_or("?"));
+                }
+                BleEvent::ClientConnected { client_id } => {
+                    log::info!("[BLE] Client connected: {}", client_id);
+                    state.connection_status = ConnectionStatus::Pairing;
+                    state.paired_device_id  = Some(client_id);
+                }
+                BleEvent::ClientDisconnected { client_id } => {
+                    log::info!("[BLE] Client disconnected: {}", client_id);
+                    state.connection_status = ConnectionStatus::Advertising;
+                    state.paired_device_id  = None;
+                    // Re-generate PIN for next pairing session
+                    state.pairing_pin = Some(generate_pairing_pin());
+                }
+                BleEvent::AuthReceived { raw } => {
+                    log::info!("[BLE] Auth payload received ({} bytes) — verifying...", raw.len());
+                    // TODO Phase 3: Verify HMAC-SHA256 auth token
+                    state.connection_status = ConnectionStatus::Ready;
+                }
+                BleEvent::CommandReceived { raw } => {
+                    log::debug!("[BLE] Command payload received ({} bytes)", raw.len());
+                    // TODO Phase 4: Dispatch to engine::keyboard
+                }
+                BleEvent::Error { reason } => {
+                    log::error!("[BLE] Error: {}", reason);
+                    state.connection_status = ConnectionStatus::Disconnected;
+                }
+            }
+        }
+    });
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
 fn main() {
     let shared_state = Arc::new(Mutex::new(DaemonState::default()));
     let state_for_setup = shared_state.clone();
+    let state_for_ble   = shared_state.clone();
 
     tauri::Builder::default()
         .manage(shared_state)
@@ -120,6 +172,7 @@ fn main() {
                 window.hide().ok();
             }
 
+            // Build initial tray menu
             let state_snapshot = state_for_setup.lock().unwrap().clone();
             let tray_menu = build_tray_menu(app.handle(), &state_snapshot)?;
 
@@ -149,14 +202,28 @@ fn main() {
                 })
                 .build(app)?;
 
-            log::info!("OpenDeck Daemon started — BLE GATT server initializing...");
+            // ── Start BLE GATT server ─────────────────────────────────────────
+            let (gatt_server, ble_rx) = create_gatt_server();
+
+            // Spin up the event loop BEFORE starting the server
+            start_ble_event_loop(ble_rx, state_for_ble);
+
+            // Start advertising (non-blocking: CoreBluetooth uses delegate callbacks)
+            if let Err(e) = gatt_server.start() {
+                log::error!("[BLE] Failed to start GATT server: {}", e);
+            }
+
+            // Keep the server alive for the process lifetime
+            app.manage(gatt_server);
+
+            log::info!("OpenDeck Daemon ready.");
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("Error building OpenDeck daemon")
         .run(|_app_handle, event| {
             if let RunEvent::ExitRequested { api, .. } = event {
-                // Prevent full exit when settings window is closed — keep running in tray
+                // Keep daemon alive when settings window is closed
                 api.prevent_exit();
             }
         });
