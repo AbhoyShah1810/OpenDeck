@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+/// BLE UUID constants for the OpenDeck GATT service and characteristics
+pub struct BleUuid;
+impl BleUuid {
+    pub const SERVICE:   &'static str = "13370001-DEAD-BEEF-FEED-CAFE00000001";
+    pub const COMMAND:   &'static str = "13370002-DEAD-BEEF-FEED-CAFE00000001";
+    pub const TELEMETRY: &'static str = "13370003-DEAD-BEEF-FEED-CAFE00000001";
+    pub const AUTH:      &'static str = "13370004-DEAD-BEEF-FEED-CAFE00000001";
+}
+
 /// Action type triggered by phone button tap
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -23,7 +32,7 @@ pub struct ActionPayload {
     pub sequence_delay_ms: u32,
 }
 
-/// System Metrics snapshot
+/// System metrics snapshot
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemMetrics {
@@ -56,7 +65,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_action_payload_serialization() {
+    fn test_action_payload_roundtrip() {
         let action = ActionPayload {
             id: "btn_test_1".to_string(),
             action_type: ActionType::Hotkey,
@@ -65,33 +74,21 @@ mod tests {
             payload: "".to_string(),
             sequence_delay_ms: 0,
         };
-
-        // Serialize to MsgPack
-        let buf = rmp_serde::to_vec_named(&action).expect("Serialization failed");
-        assert!(buf.len() < 100, "Payload size too large");
-
-        // Deserialize back
-        let deserialized: ActionPayload =
-            rmp_serde::from_slice(&buf).expect("Deserialization failed");
-        assert_eq!(action, deserialized);
+        let buf = rmp_serde::to_vec_named(&action).unwrap();
+        assert!(buf.len() < 100);
+        let decoded: ActionPayload = rmp_serde::from_slice(&buf).unwrap();
+        assert_eq!(action, decoded);
     }
 
     #[test]
-    fn test_telemetry_payload_serialization() {
-        let telemetry = TelemetryPayload {
+    fn test_telemetry_payload_roundtrip() {
+        let t = TelemetryPayload {
             status: "READY".to_string(),
             active_app: "com.microsoft.VSCode".to_string(),
-            metrics: SystemMetrics {
-                cpu: 14.2,
-                ram: 58.6,
-                mic_muted: false,
-                audio_playing: true,
-            },
+            metrics: SystemMetrics { cpu: 14.2, ram: 58.6, mic_muted: false, audio_playing: true },
         };
-
-        let buf = rmp_serde::to_vec_named(&telemetry).expect("Telemetry serialization failed");
-        let deserialized: TelemetryPayload =
-            rmp_serde::from_slice(&buf).expect("Telemetry deserialization failed");
-        assert_eq!(telemetry, deserialized);
+        let buf = rmp_serde::to_vec_named(&t).unwrap();
+        let decoded: TelemetryPayload = rmp_serde::from_slice(&buf).unwrap();
+        assert_eq!(t, decoded);
     }
 }

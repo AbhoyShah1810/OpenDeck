@@ -39,7 +39,7 @@ This plan documents the end-to-end production implementation for **OpenDeck**—
 ---
 
 ### Phase 2: Desktop Companion Daemon (macOS & Windows)
-- [ ] **Step 2.1: Tauri Project Setup & System Tray**
+- [x] **Step 2.1: Tauri Project Setup & System Tray**
   - Scaffold `desktop/` using Tauri (Rust core + minimal HTML/JS settings UI).
   - Configure native system tray menu (`main.rs`) displaying pairing PINs, connection status, connected devices, and logs.
 - [ ] **Step 2.2: Cross-Platform Native GATT Peripheral**
