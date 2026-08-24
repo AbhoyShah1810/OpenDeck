@@ -12,7 +12,7 @@ use tauri::{
     AppHandle, Manager, RunEvent,
 };
 
-use crate::ble::server::{create_gatt_server, generate_pairing_pin, BleEvent};
+use app_lib::ble::server::{create_gatt_server, generate_pairing_pin, BleEvent};
 
 /// Shared global daemon state accessible across Tauri commands and the tray menu
 #[derive(Debug, Clone)]
@@ -112,7 +112,7 @@ fn build_tray_menu(app: &AppHandle, state: &DaemonState) -> tauri::Result<Menu<t
 
 /// Spawns a Tokio task that drains the BLE event channel and updates DaemonState
 fn start_ble_event_loop(
-    mut rx: crate::ble::server::BleReceiver,
+    mut rx: app_lib::ble::server::BleReceiver,
     shared_state: Arc<Mutex<DaemonState>>,
 ) {
     tokio::spawn(async move {

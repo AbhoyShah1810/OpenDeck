@@ -42,10 +42,10 @@ This plan documents the end-to-end production implementation for **OpenDeck**—
 - [x] **Step 2.1: Tauri Project Setup & System Tray**
   - Scaffold `desktop/` using Tauri (Rust core + minimal HTML/JS settings UI).
   - Configure native system tray menu (`main.rs`) displaying pairing PINs, connection status, connected devices, and logs.
-- [ ] **Step 2.2: Cross-Platform Native GATT Peripheral**
-  - **macOS:** Build CoreBluetooth peripheral manager using Objective-C FFI bridge (`objc` / `core-bluetooth` crates).
-  - **Windows:** Build WinRT GATT Server using `windows::Devices::Bluetooth::GenericAttributeProfile`.
-  - Implement dynamic BLE service advertising and connection management.
+- [x] **Step 2.2: Cross-Platform Native GATT Peripheral**
+  - **macOS:** CoreBluetooth `CBPeripheralManager` via `objc2-core-bluetooth 0.3.2` with full delegate implementation.
+  - **Windows:** WinRT `GattServiceProvider` via `windows 0.61` crate with typed event handlers.
+  - Dynamic BLE advertising of custom 128-bit Primary Service UUID.
 - [ ] **Step 2.3: Native Input Automation Engine**
   - Implement synthetic keypress, mouse click, and shortcut dispatcher using `enigo` / `rdev`.
   - Map logical modifiers: `PRIMARY_MOD` $\rightarrow$ `Cmd` on macOS / `Ctrl` on Windows.
