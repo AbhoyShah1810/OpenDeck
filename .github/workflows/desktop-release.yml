@@ -28,6 +28,14 @@ jobs:
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install NPM dependencies
+        run: npm install
+
       - name: Build Tauri App and Publish Release
         uses: tauri-apps/tauri-action@v0
         env:
