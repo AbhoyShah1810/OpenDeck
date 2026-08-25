@@ -73,14 +73,17 @@ class ProfileRepository {
 
   /// Matches target application bundle ID / window title for auto profile switching
   DeckProfile? getProfileForApp(String activeApp) {
+    if (activeApp.isEmpty) return null;
+    final cleanApp = activeApp.toLowerCase();
     final profiles = getAllProfiles();
-    final match = profiles.firstWhere(
-      (p) => p.targetApp.isNotEmpty && p.targetApp != 'default' && activeApp.toLowerCase().contains(p.targetApp.toLowerCase()),
-      orElse: () => profiles.firstWhere(
-        (p) => p.id == getActiveProfileId(),
-        orElse: () => profiles.first,
-      ),
-    );
-    return match;
+
+    for (final p in profiles) {
+      if (p.targetApp.isEmpty || p.targetApp == 'default') continue;
+      final target = p.targetApp.toLowerCase();
+      if (cleanApp.contains(target) || target.contains(cleanApp)) {
+        return p;
+      }
+    }
+    return null;
   }
 }

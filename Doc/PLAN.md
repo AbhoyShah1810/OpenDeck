@@ -84,21 +84,21 @@ This plan documents the end-to-end production implementation for **OpenDeck**—
   - Explicit 5-state machine: `DISCONNECTED` $\rightarrow$ `SCANNING` $\rightarrow$ `CONNECTING` $\rightarrow$ `PAIRING` $\rightarrow$ `READY`.
   - Built dedicated `ScannerScreen` interface filtering discovery strictly for OpenDeck Primary Service UUID (`13370001-...`).
   - Added connection status badge pill indicator in AppBar.
-- [ ] **Step 4.2: Out-of-Band PIN Handshake**
+- [x] **Step 4.2: Out-of-Band PIN Handshake**
   - Generate 4-digit PIN on PC screen tray upon first handshake.
   - Implement phone PIN entry prompt and verification write to Auth Characteristic.
-- [ ] **Step 4.3: Background Auto-Reconnect**
+- [x] **Step 4.3: Background Auto-Reconnect**
   - Store validated desktop BLE UUID on phone local database.
   - Implement automatic direct reconnect routine on mobile app startup when in BLE range.
 
 ---
 
 ### Phase 5: Telemetry & Third-Party Integrations
-- [ ] **Step 5.1: Active Window Listener & Auto Profile Switching**
+- [x] **Step 5.1: Active Window Listener & Auto Profile Switching**
   - Implement focused-window tracking loop on Desktop Agent (monitoring VS Code, Photoshop, OBS).
   - Broadcast window changes via Telemetry Characteristic `Notify`.
   - Auto-switch button profile on phone matching the active application.
-- [ ] **Step 5.2: OBS Studio & Media Integrations**
+- [x] **Step 5.2: OBS Studio & Media Integrations**
   - Add native OBS Studio WebSocket (`obs-websocket`) connector inside desktop agent.
   - Query OS system media APIs for track metadata/artwork streaming to phone tiles.
 

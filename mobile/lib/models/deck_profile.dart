@@ -88,5 +88,19 @@ class DeckProfile {
             DeckTile(id: 'dev_6', label: 'Git Push', iconName: 'terminal', colorHex: '#F97316', actionType: ActionType.shell, payload: 'git push'),
           ],
         ),
+        DeckProfile(
+          id: 'profile_streamer',
+          name: 'Streaming',
+          targetApp: 'com.obsproject.Studio',
+          columns: 3,
+          tiles: [
+            DeckTile(id: 'obs_1', label: 'Go Live', iconName: 'videocam', colorHex: '#EF4444', actionType: ActionType.obsAction, payload: 'TOGGLE_STREAM'),
+            DeckTile(id: 'obs_2', label: 'Record', iconName: 'fiber_manual_record', colorHex: '#F59E0B', actionType: ActionType.obsAction, payload: 'TOGGLE_RECORD'),
+            DeckTile(id: 'obs_3', label: 'Mute Mic', iconName: 'mic_off', colorHex: '#EC4899', actionType: ActionType.obsAction, payload: 'TOGGLE_MUTE'),
+            DeckTile(id: 'obs_4', label: 'Main Scene', iconName: 'tv', colorHex: '#6366F1', actionType: ActionType.obsAction, payload: 'SCENE:Main'),
+            DeckTile(id: 'obs_5', label: 'Gaming', iconName: 'sports_esports', colorHex: '#3B82F6', actionType: ActionType.obsAction, payload: 'SCENE:Gaming'),
+            DeckTile(id: 'obs_6', label: 'BRB Scene', iconName: 'free_breakfast', colorHex: '#10B981', actionType: ActionType.obsAction, payload: 'SCENE:BRB'),
+          ],
+        ),
       ];
 }

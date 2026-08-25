@@ -31,11 +31,16 @@ pub fn dispatch_action(action: &ActionPayload) -> Result<(), String> {
             shell::execute_shell_command(&action.payload)?;
         }
         ActionType::ObsAction => {
-            // OBS websocket or shortcut action placeholder
             log::info!("[engine/dispatcher] OBS action triggered: {}", action.payload);
-            if !action.payload.is_empty() {
-                shell::execute_shell_command(&action.payload)?;
-            }
+            let payload = action.payload.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::engine::obs::send_obs_command(&payload).await {
+                    log::warn!("[engine/dispatcher] OBS websocket command failed: {}. Trying shell fallback...", e);
+                    if let Err(shell_err) = shell::execute_shell_command(&payload) {
+                        log::error!("[engine/dispatcher] Shell fallback also failed: {}", shell_err);
+                    }
+                }
+            });
         }
         ActionType::MultiAction => {
             // Multi-action macro payload (delay or sequential hotkeys)

@@ -118,6 +118,23 @@ class _OpenDeckHomePageState extends State<OpenDeckHomePage>
             matchedProfile.id != _activeProfile.id) {
           setState(() => _activeProfile = matchedProfile);
           widget.profileRepo.setActiveProfileId(matchedProfile.id);
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  '⚡ Switched profile to "${matchedProfile.name}" (${telemetry.activeApp})',
+                ),
+                backgroundColor: const Color(0xFF6366F1),
+                duration: const Duration(seconds: 2),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            );
+          }
         }
       }
     });

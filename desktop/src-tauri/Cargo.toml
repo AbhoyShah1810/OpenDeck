@@ -24,7 +24,7 @@ rmp-serde = "1.3"
 log = "0.4"
 tauri = { version = "2.11.3", features = ["tray-icon"] }
 tauri-plugin-log = "2"
-tokio = { version = "1", features = ["sync", "rt-multi-thread"] }
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4"] }
 rand = "0.9"
 # Input automation — synthetic keyboard / mouse / media events
@@ -33,6 +33,9 @@ enigo = { version = "0.6.1", default-features = false }
 shell-words = "1.1"
 # System metrics for telemetry (CPU / RAM)
 sysinfo = { version = "0.35", default-features = false, features = ["system"] }
+# OBS Studio WebSocket client
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
 
 # ── macOS CoreBluetooth GATT Peripheral & Security ───────────────────────────
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -45,6 +48,7 @@ objc2-foundation = { version = "0.3.2", features = [
   "NSString",
   "NSUUID",
 ] }
+objc2-app-kit = { version = "0.3.2", features = ["NSWorkspace", "NSRunningApplication"] }
 objc2 = { version = "0.6.4" }
 dispatch2 = "0.3.1"
 core-foundation = "0.10"

@@ -16,6 +16,7 @@ use app_lib::ble::{
     schema::{HandshakePayload, TelemetryPayload, SystemMetrics},
     server::{create_gatt_server, generate_pairing_pin, BleEvent, GattServer},
 };
+use app_lib::engine::telemetry::start_telemetry_loop;
 
 /// Shared global daemon state accessible across Tauri commands and the tray menu
 #[derive(Debug, Clone)]
@@ -127,6 +128,7 @@ fn start_ble_event_loop(
     whitelist: Arc<app_lib::security::WhitelistManager>,
     gatt_server: Arc<dyn GattServer>,
     app_handle: AppHandle,
+    telemetry_tx: tokio::sync::watch::Sender<bool>,
 ) {
     tokio::spawn(async move {
         log::info!("[BLE] Event loop started.");
@@ -143,6 +145,8 @@ fn start_ble_event_loop(
                     if whitelist.is_bonded(&client_id) {
                         log::info!("[Security] Client '{}' is in whitelist — transition to Ready.", client_id);
                         state.connection_status = ConnectionStatus::Ready;
+                        // Signal telemetry loop to start broadcasting
+                        let _ = telemetry_tx.send(true);
                     } else {
                         log::info!("[Security] Client '{}' is unbonded — requires PIN handshake. PIN={}",
                             client_id,
@@ -158,6 +162,8 @@ fn start_ble_event_loop(
                     state.paired_device_id  = None;
                     // Rotate PIN on every disconnect for security
                     state.pairing_pin = Some(generate_pairing_pin());
+                    // Signal telemetry loop to pause
+                    let _ = telemetry_tx.send(false);
                 }
                 BleEvent::AuthReceived { raw } => {
                     log::info!("[BLE] Auth payload received ({} bytes) — verifying PIN...", raw.len());
@@ -188,6 +194,8 @@ fn start_ble_event_loop(
 
                             state.connection_status = ConnectionStatus::Ready;
                             state.pairing_pin = None; // Clear PIN display once paired
+                            // Start telemetry broadcast for the newly paired client
+                            let _ = telemetry_tx.send(true);
 
                             // Notify mobile: AUTH OK
                             let auth_ok = TelemetryPayload {
@@ -329,13 +337,31 @@ fn main() {
             // ── Start BLE GATT server ─────────────────────────────────────────
             let (gatt_server, ble_rx) = create_gatt_server();
 
+            // Watch channel: true = client connected & Ready, false = paused
+            let (telemetry_tx, telemetry_rx) = tokio::sync::watch::channel(false);
+
             // Spin up the event loop BEFORE starting the server
-            start_ble_event_loop(ble_rx, state_for_ble, whitelist, gatt_server.clone(), app.handle().clone());
+            start_ble_event_loop(
+                ble_rx,
+                state_for_ble,
+                whitelist,
+                gatt_server.clone(),
+                app.handle().clone(),
+                telemetry_tx,
+            );
 
             // Start advertising (non-blocking: CoreBluetooth uses delegate callbacks)
             if let Err(e) = gatt_server.start() {
                 log::error!("[BLE] Failed to start GATT server: {}", e);
             }
+
+            // ── Start window telemetry broadcast loop ─────────────────────────
+            // Polls active window every 500ms; only transmits when a client is Ready.
+            start_telemetry_loop(
+                gatt_server.clone(),
+                telemetry_rx,
+                tokio::time::Duration::from_millis(500),
+            );
 
             // Keep the server alive for the process lifetime
             app.manage(gatt_server);
