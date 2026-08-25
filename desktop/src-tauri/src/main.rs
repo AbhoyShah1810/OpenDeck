@@ -73,7 +73,14 @@ fn get_daemon_state(state: tauri::State<Arc<Mutex<DaemonState>>>) -> serde_json:
         "statusLabel": s.connection_status.label(),
         "pairedDeviceId": s.paired_device_id,
         "pairingPin": s.pairing_pin,
+        "accessibilityGranted": app_lib::security::is_accessibility_granted(),
     })
+}
+
+/// Request macOS Accessibility permissions (triggers OS prompt)
+#[tauri::command]
+fn request_accessibility() -> bool {
+    app_lib::security::request_accessibility_permission()
 }
 
 // ── Tray menu builder ─────────────────────────────────────────────────────────
@@ -114,6 +121,7 @@ fn build_tray_menu(app: &AppHandle, state: &DaemonState) -> tauri::Result<Menu<t
 fn start_ble_event_loop(
     mut rx: app_lib::ble::server::BleReceiver,
     shared_state: Arc<Mutex<DaemonState>>,
+    whitelist: Arc<app_lib::security::WhitelistManager>,
 ) {
     tokio::spawn(async move {
         log::info!("[BLE] Event loop started.");
@@ -127,23 +135,58 @@ fn start_ble_event_loop(
                 }
                 BleEvent::ClientConnected { client_id } => {
                     log::info!("[BLE] Client connected: {}", client_id);
-                    state.connection_status = ConnectionStatus::Pairing;
-                    state.paired_device_id  = Some(client_id);
+                    if whitelist.is_bonded(&client_id) {
+                        log::info!("[Security] Client '{}' is in whitelist — transition to Ready.", client_id);
+                        state.connection_status = ConnectionStatus::Ready;
+                    } else {
+                        log::info!("[Security] Client '{}' is unbonded — requires PIN handshake.", client_id);
+                        state.connection_status = ConnectionStatus::Pairing;
+                    }
+                    state.paired_device_id = Some(client_id);
                 }
                 BleEvent::ClientDisconnected { client_id } => {
                     log::info!("[BLE] Client disconnected: {}", client_id);
                     state.connection_status = ConnectionStatus::Advertising;
                     state.paired_device_id  = None;
-                    // Re-generate PIN for next pairing session
                     state.pairing_pin = Some(generate_pairing_pin());
                 }
                 BleEvent::AuthReceived { raw } => {
                     log::info!("[BLE] Auth payload received ({} bytes) — verifying...", raw.len());
-                    // TODO Phase 3: Verify HMAC-SHA256 auth token
+                    if let Ok(handshake) = rmp_serde::from_slice::<app_lib::ble::schema::HandshakePayload>(&raw) {
+                        // Store paired client in whitelist
+                        let device = app_lib::security::BondedDevice {
+                            client_id: handshake.client_id.clone(),
+                            device_name: format!("Mobile Device ({})", handshake.client_id),
+                            shared_secret: handshake.auth_code,
+                            paired_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
+                        };
+                        if let Err(e) = whitelist.add_bonded_device(device) {
+                            log::error!("[Security] Failed to save bonded device: {}", e);
+                        } else {
+                            log::info!("[Security] Successfully bonded device '{}'", handshake.client_id);
+                        }
+                    }
                     state.connection_status = ConnectionStatus::Ready;
                 }
                 BleEvent::CommandReceived { raw } => {
                     log::debug!("[BLE] Command payload received ({} bytes)", raw.len());
+
+                    // Security check: reject requests if connection is not Ready or client is unbonded
+                    let is_authorised = state.connection_status == ConnectionStatus::Ready
+                        || state.paired_device_id.as_ref().map_or(false, |id| whitelist.is_bonded(id));
+
+                    if !is_authorised {
+                        log::warn!(
+                            "[Security] ❌ Rejected macro command from unauthenticated client (device: {:?}, status: {:?})",
+                            state.paired_device_id,
+                            state.connection_status
+                        );
+                        continue;
+                    }
+
                     match rmp_serde::from_slice::<app_lib::ble::schema::ActionPayload>(&raw) {
                         Ok(action) => {
                             if let Err(e) = app_lib::engine::dispatcher::dispatch_action(&action) {
@@ -174,7 +217,7 @@ fn main() {
     tauri::Builder::default()
         .manage(shared_state)
         .plugin(tauri_plugin_log::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![get_daemon_state])
+        .invoke_handler(tauri::generate_handler![get_daemon_state, request_accessibility])
         .setup(move |app| {
             // Hide the settings window on start — daemon lives in the tray only
             if let Some(window) = app.get_webview_window("main") {
@@ -211,11 +254,18 @@ fn main() {
                 })
                 .build(app)?;
 
+            // ── Whitelist Security Manager ────────────────────────────────────
+            let config_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from(".opendeck"));
+            let whitelist = Arc::new(app_lib::security::WhitelistManager::new(config_dir));
+
             // ── Start BLE GATT server ─────────────────────────────────────────
             let (gatt_server, ble_rx) = create_gatt_server();
 
             // Spin up the event loop BEFORE starting the server
-            start_ble_event_loop(ble_rx, state_for_ble);
+            start_ble_event_loop(ble_rx, state_for_ble, whitelist);
 
             // Start advertising (non-blocking: CoreBluetooth uses delegate callbacks)
             if let Err(e) = gatt_server.start() {
@@ -224,6 +274,13 @@ fn main() {
 
             // Keep the server alive for the process lifetime
             app.manage(gatt_server);
+
+            let acc_granted = app_lib::security::is_accessibility_granted();
+            if acc_granted {
+                log::info!("[Security] TCC Accessibility permission is GRANTED.");
+            } else {
+                log::warn!("[Security] TCC Accessibility permission is MISSING! Synthetic keypresses will require permission in System Settings.");
+            }
 
             log::info!("OpenDeck Daemon ready.");
             Ok(())

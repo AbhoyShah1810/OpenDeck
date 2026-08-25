@@ -51,34 +51,39 @@ This plan documents the end-to-end production implementation for **OpenDeck**—
   - Abstract modifier translation: `PRIMARY_MOD` $\rightarrow$ `Cmd` on macOS / `Control` on Windows.
   - Native hardware media triggers (Play/Pause, Next/Prev, Mute, Vol Up/Down).
   - Shell command runner with argument splitting via `shell-words`.
-- [ ] **Step 2.4: Host Permissions & Security Whitelist**
-  - Add macOS `NSBluetoothAlwaysUsageDescription` and TCC Accessibility permission prompt flow.
-  - Implement local bonded device whitelist stored in encrypted desktop app config.
+- [x] **Step 2.4: Host Permissions & Security Whitelist**
+  - Added macOS `NSBluetoothAlwaysUsageDescription` & `NSBluetoothPeripheralUsageDescription` in `Info.plist` and `tauri.conf.json`.
+  - Implemented TCC Accessibility permission check (`AXIsProcessTrustedWithOptions`) and Settings prompt UI flow.
+  - Implemented persistent bonded device whitelist (`WhitelistManager`) and enforced whitelist validation in the GATT event loop.
 
 ---
 
 ### Phase 3: Mobile Client Application (Flutter)
-- [ ] **Step 3.1: Flutter Mobile Foundation**
-  - Initialize Flutter app under `mobile/` configured for iOS (iOS 13.0+) and Android (API 21+).
-  - Add core dependencies: `flutter_blue_plus`, `isar`/`hive`, `vibration`/`haptic_feedback`, `wakelock_plus`.
-- [ ] **Step 3.2: BLE Central Manager & Sub-15ms Latency Engine**
-  - Build connection manager using `flutter_blue_plus`.
-  - Implement Android connection priority request (`ConnectionPriority.high`) to enforce 11.25ms–15ms intervals.
-  - Implement `WriteWithoutResponse` command dispatching to eliminate network ACK roundtrips.
-  - Negotiate MTU size ($\ge 185$ bytes).
-- [ ] **Step 3.3: Interactive Touch Canvas & Haptics**
-  - Build responsive grid widget supporting $3\times3$, $4\times4$, and $M\times N$ layouts.
-  - Attach tactile micro-haptics to button touch-down/touch-up states.
-  - Build in-app drag-and-drop tile editor for assigning colors, hotkeys, and SVG icons.
-- [ ] **Step 3.4: Local Storage & Profile Management**
-  - Set up Isar/Hive NoSQL database drivers to store profiles, grid buttons, and bonded computer BLE UUIDs.
+- [x] **Step 3.1: Flutter Mobile Foundation**
+  - Initialized Flutter app under `mobile/` configured for iOS (iOS 13.0+) and Android (API 21+).
+  - Added core dependencies: `flutter_blue_plus`, `hive`, `wakelock_plus`, `haptic_feedback`, `msgpack_dart`, `google_fonts`.
+  - Configured Bluetooth usage descriptions & background modes in `Info.plist` & `AndroidManifest.xml`.
+- [x] **Step 3.2: BLE Central Manager & Sub-15ms Latency Engine**
+  - Built `BleManager` central connection manager using `flutter_blue_plus`.
+  - Implemented Android `ConnectionPriority.high` (11.25ms–15.00ms intervals) & `requestMtu(247)` single-packet MTU negotiation.
+  - Implemented `sendActionPayload` using `withoutResponse: true` (`WriteWithoutResponse` GATT command mode).
+  - Wired telemetry notification listener stream and auth handshake dispatching.
+- [x] **Step 3.3: Interactive Touch Canvas & Haptics**
+  - Built responsive `DeckGrid` widget supporting $3\times3$, $4\times4$, and customizable $M\times N$ layouts.
+  - Attached tactile micro-haptics (`HapticFeedback.lightImpact()` / `selectionClick()`) and scale animation (`AnimatedScale`) to `DeckTileButton`.
+  - Built in-app `TileEditorDialog` modal sheet for configuring hotkeys, colors, labels, and icons directly on phone.
+- [x] **Step 3.4: Local Storage & Profile Management**
+  - Configured embedded Hive NoSQL storage (`ProfileRepository` & `BondedRepository`) under `lib/core/storage/`.
+  - Created `DeckProfile` & `BondedDeviceModel` schemas with default starter profile presets (General, Developer).
+  - Implemented fast local persistence, profile switching dropdown, and app target auto-switching.
 
 ---
 
 ### Phase 4: Pairing, Bonding & Auto-Reconnect State Machine
-- [ ] **Step 4.1: Pairing State Machine**
-  - Implement states: `DISCONNECTED` $\rightarrow$ `SCANNING` $\rightarrow$ `CONNECTING` $\rightarrow$ `PAIRING` $\rightarrow$ `READY`.
-  - Build scanner UI filtering strictly for OpenDeck Primary Service UUID.
+- [x] **Step 4.1: Pairing State Machine**
+  - Explicit 5-state machine: `DISCONNECTED` $\rightarrow$ `SCANNING` $\rightarrow$ `CONNECTING` $\rightarrow$ `PAIRING` $\rightarrow$ `READY`.
+  - Built dedicated `ScannerScreen` interface filtering discovery strictly for OpenDeck Primary Service UUID (`13370001-...`).
+  - Added connection status badge pill indicator in AppBar.
 - [ ] **Step 4.2: Out-of-Band PIN Handshake**
   - Generate 4-digit PIN on PC screen tray upon first handshake.
   - Implement phone PIN entry prompt and verification write to Auth Characteristic.

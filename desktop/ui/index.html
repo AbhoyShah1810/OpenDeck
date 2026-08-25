@@ -76,9 +76,13 @@
     <div class="pin-hint">Enter this code on your mobile device to pair</div>
   </div>
 
-  <div class="card" id="device-card" style="display:none">
-    <h2>Connected Device</h2>
-    <div class="device-id" id="device-id">—</div>
+  <div class="card" id="perm-card" style="display:none">
+    <h2>System Permissions</h2>
+    <div class="status-row" style="justify-content: space-between;">
+      <span>Accessibility (Input Injection)</span>
+      <span id="perm-badge" class="badge disconnected">Missing</span>
+    </div>
+    <button id="perm-btn" onclick="requestPerm()" style="margin-top: 12px; padding: 8px 14px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 13px; display: none;">Grant Permission</button>
   </div>
 
   <footer>OpenDeck v0.1.0 · MIT License · github.com/your-username/opendeck</footer>
@@ -113,9 +117,30 @@
         } else {
           deviceCard.style.display = 'none';
         }
+        const permCard = document.getElementById('perm-card');
+        const permBadge = document.getElementById('perm-badge');
+        const permBtn = document.getElementById('perm-btn');
+
+        if (state.accessibilityGranted !== undefined) {
+          permCard.style.display = 'block';
+          if (state.accessibilityGranted) {
+            permBadge.textContent = 'Granted';
+            permBadge.className = 'badge ready';
+            permBtn.style.display = 'none';
+          } else {
+            permBadge.textContent = 'Missing';
+            permBadge.className = 'badge disconnected';
+            permBtn.style.display = 'inline-block';
+          }
+        }
       } catch (e) {
         console.error('State fetch failed:', e);
       }
+    }
+
+    async function requestPerm() {
+      await invoke('request_accessibility');
+      refresh();
     }
 
     refresh();

@@ -34,7 +34,7 @@ shell-words = "1.1"
 # System metrics for telemetry (CPU / RAM)
 sysinfo = { version = "0.35", default-features = false, features = ["system"] }
 
-# ── macOS CoreBluetooth GATT Peripheral ──────────────────────────────────────
+# ── macOS CoreBluetooth GATT Peripheral & Security ───────────────────────────
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-bluetooth = { version = "0.3.2" }
 objc2-foundation = { version = "0.3.2", features = [
@@ -47,6 +47,7 @@ objc2-foundation = { version = "0.3.2", features = [
 ] }
 objc2 = { version = "0.6.4" }
 dispatch2 = "0.3.1"
+core-foundation = "0.10"
 
 # ── Windows WinRT GATT Server ─────────────────────────────────────────────────
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -57,3 +58,7 @@ windows = { version = "0.61", features = [
   "Foundation_Collections",
   "Storage_Streams",
 ] }
+
+[dev-dependencies]
+tempfile = "3"
+

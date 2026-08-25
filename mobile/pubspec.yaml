@@ -1,5 +1,5 @@
 name: mobile
-description: OpenDeck Mobile Client App
+description: OpenDeck Mobile Client App - Custom Stream Deck Controller
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,7 +9,28 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
+  # Low-latency BLE central operations
+  flutter_blue_plus: ^1.32.0
+
+  # MessagePack binary serialization
   msgpack_dart: ^1.0.1
+
+  # Embedded NoSQL database for profiles & bonded devices
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # Screen wake control during macro sessions
+  wakelock_plus: ^1.2.8
+
+  # Tactile haptics for touch feedback
+  haptic_feedback: ^0.5.1
+
+  # Unique identifier generation
+  uuid: ^4.3.3
+
+  # Modern typography
+  google_fonts: ^6.2.0
 
 dev_dependencies:
   flutter_test:

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>OpenDeck requires Bluetooth access to connect to your mobile deck controller.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>OpenDeck acts as a Bluetooth Low Energy peripheral to receive macro commands.</string>
+</dict>
+</plist>
