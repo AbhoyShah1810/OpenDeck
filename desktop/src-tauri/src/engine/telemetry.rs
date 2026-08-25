@@ -33,7 +33,7 @@ pub fn start_telemetry_loop(
     mut active_rx: watch::Receiver<bool>,
     poll_interval: Duration,
 ) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         log::info!(
             "[Telemetry] Window tracking loop started (interval={}ms)",
             poll_interval.as_millis()

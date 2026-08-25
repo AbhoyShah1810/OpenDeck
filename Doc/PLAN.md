@@ -105,14 +105,14 @@ This plan documents the end-to-end production implementation for **OpenDeck**—
 ---
 
 ### Phase 6: CI/CD & Zero-Cost Open Source Release Pipeline
-- [ ] **Step 6.1: Desktop Release Matrix (GitHub Actions)**
+- [x] **Step 6.1: Desktop Release Matrix (GitHub Actions)**
   - Build `.github/workflows/desktop-release.yml` using `tauri-apps/tauri-action`.
   - Cross-compile universal macOS `.dmg` and Windows `.msi`/portable `.exe` on git release tags.
-- [ ] **Step 6.2: Mobile Release Matrix (GitHub Actions)**
+- [x] **Step 6.2: Mobile Release Matrix (GitHub Actions)**
   - Build `.github/workflows/mobile-release.yml` using `subosito/flutter-action`.
   - Compile split-per-ABI Android `.apk` assets attached to GitHub releases.
   - Provide Fastlane configuration and documentation for iOS TestFlight / AltStore sideloading.
-- [ ] **Step 6.3: Developer Setup Documentation**
+- [x] **Step 6.3: Developer Setup Documentation**
   - Write detailed setup guides in `README.md` and repository docs.
 
 ---

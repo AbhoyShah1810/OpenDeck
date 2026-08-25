@@ -102,7 +102,7 @@ define_class!(
         }
 
         /// Advertising started (or failed)
-        #[unsafe(method(peripheralManagerDidStartAdvertising:))]
+        #[unsafe(method(peripheralManagerDidStartAdvertising:error:))]
         fn peripheralManagerDidStartAdvertising_(
             &self,
             _manager: &CBPeripheralManager,

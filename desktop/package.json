@@ -1,0 +1,15 @@
+{
+  "name": "opendeck-desktop",
+  "version": "1.0.0",
+  "description": "OpenDeck Desktop Companion Daemon",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "cargo run --manifest-path src-tauri/Cargo.toml"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

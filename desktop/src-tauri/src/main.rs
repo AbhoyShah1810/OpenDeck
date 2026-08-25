@@ -130,7 +130,7 @@ fn start_ble_event_loop(
     app_handle: AppHandle,
     telemetry_tx: tokio::sync::watch::Sender<bool>,
 ) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         log::info!("[BLE] Event loop started.");
         while let Some(event) = rx.recv().await {
             let mut state = shared_state.lock().unwrap();

@@ -1,0 +1,33 @@
+default_platform(:ios)
+
+platform :ios do
+  desc "Build and upload to TestFlight"
+  lane :beta do
+    # Fetch provisioning profiles and certificates automatically (Match)
+    # match(type: "appstore")
+    
+    # Build the iOS application using Flutter
+    sh("cd ../.. && flutter build ipa --release --export-options-plist=ios/ExportOptions.plist")
+    
+    # Upload to TestFlight
+    # upload_to_testflight(
+    #   ipa: "../../build/ios/ipa/opendeck.ipa",
+    #   skip_waiting_for_build_processing: true
+    # )
+  end
+
+  desc "Build an unsigned IPA for AltStore/SideStore sideloading"
+  lane :sideload do
+    # Clean workspace
+    clear_derived_data
+    
+    # Build the IPA without codesigning constraints (for easy AltStore installation)
+    sh("cd ../.. && flutter build ipa --release --no-codesign")
+    
+    # Extract the Payload/Runner.app into a playable unsigned .ipa
+    sh("cd ../../build/ios/archive/Runner.xcarchive/Products/Applications && mkdir -p Payload && cp -R Runner.app Payload/ && zip -r ../../../../../OpenDeck-Sideload.ipa Payload && rm -rf Payload")
+    
+    UI.success("Successfully generated OpenDeck-Sideload.ipa at mobile/build/OpenDeck-Sideload.ipa")
+    UI.message("You can now install this file using AltStore or SideStore on your device.")
+  end
+end

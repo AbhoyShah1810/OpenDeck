@@ -1,0 +1,50 @@
+name: Mobile Release Matrix
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger only on version tags, e.g., v1.0.0
+
+jobs:
+  build-android:
+    name: Build & Release Android APK
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: ./mobile
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Android APK (Split per ABI)
+        run: |
+          # Builds separate APKs for arm64-v8a, armeabi-v7a, and x86_64
+          # This significantly reduces the download size compared to a universal fat APK.
+          flutter build apk --release --split-per-abi
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            mobile/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            mobile/build/app/outputs/flutter-apk/app-x86_64-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
