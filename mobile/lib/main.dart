@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'core/ble/auto_reconnect_service.dart';
 import 'core/ble/ble_manager.dart';
 import 'core/storage/bonded_repository.dart';
 import 'core/storage/profile_repository.dart';
+import 'models/bonded_device_model.dart';
 import 'models/deck_profile.dart';
 import 'models/deck_tile.dart';
+import 'ui/screens/pin_entry_screen.dart';
 import 'ui/screens/scanner_screen.dart';
 import 'ui/widgets/deck_grid.dart';
 import 'ui/widgets/tile_editor_dialog.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   final profileRepo = ProfileRepository();
   final bondedRepo = BondedRepository();
   await profileRepo.init();
@@ -68,16 +71,33 @@ class OpenDeckHomePage extends StatefulWidget {
   State<OpenDeckHomePage> createState() => _OpenDeckHomePageState();
 }
 
-class _OpenDeckHomePageState extends State<OpenDeckHomePage> {
+class _OpenDeckHomePageState extends State<OpenDeckHomePage>
+    with WidgetsBindingObserver {
   final BleManager _bleManager = BleManager();
+  late final AutoReconnectService _autoReconnect;
+
   late List<DeckProfile> _profiles;
   late DeckProfile _activeProfile;
 
   @override
   void initState() {
     super.initState();
+
+    _autoReconnect = AutoReconnectService(
+      bleManager: _bleManager,
+      bondedRepo: widget.bondedRepo,
+    );
+
+    WidgetsBinding.instance.addObserver(this);
+
     _loadProfiles();
     _listenToTelemetry();
+    _listenToReconnectEvents();
+
+    // Attempt silent auto-connect on startup after first frame is drawn
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoReconnect.tryAutoConnect();
+    });
   }
 
   void _loadProfiles() {
@@ -90,25 +110,66 @@ class _OpenDeckHomePageState extends State<OpenDeckHomePage> {
   }
 
   void _listenToTelemetry() {
-    // Auto profile switching based on active desktop app telemetry
     _bleManager.telemetryStream.listen((telemetry) {
       if (telemetry.activeApp.isNotEmpty) {
-        final matchedProfile = widget.profileRepo.getProfileForApp(telemetry.activeApp);
-        if (matchedProfile != null && matchedProfile.id != _activeProfile.id) {
-          setState(() {
-            _activeProfile = matchedProfile;
-          });
+        final matchedProfile =
+            widget.profileRepo.getProfileForApp(telemetry.activeApp);
+        if (matchedProfile != null &&
+            matchedProfile.id != _activeProfile.id) {
+          setState(() => _activeProfile = matchedProfile);
           widget.profileRepo.setActiveProfileId(matchedProfile.id);
         }
       }
     });
   }
 
+  void _listenToReconnectEvents() {
+    _autoReconnect.reconnectEvents.listen((event) {
+      if (!mounted) return;
+      switch (event.type) {
+        case AutoReconnectEventType.connected:
+          // Show a brief quiet snackbar — don't interrupt the user
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '🔗 Reconnected to ${event.deviceName ?? "OpenDeck Desktop"}',
+              ),
+              backgroundColor: const Color(0xFF10B981),
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          );
+        case AutoReconnectEventType.bluetoothUnavailable:
+          // Silent — Bluetooth off is an expected state on startup
+          break;
+        default:
+          break;
+      }
+    });
+  }
+
+  // ── App Lifecycle Observer ───────────────────────────────────────────────────
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // App came to foreground — attempt silent reconnect if link is down
+      _autoReconnect.onAppForegrounded();
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _autoReconnect.dispose();
     _bleManager.dispose();
     super.dispose();
   }
+
+  // ── Action handlers ──────────────────────────────────────────────────────────
 
   void _handleTileTap(DeckTile tile) async {
     final payload = tile.toActionPayload();
@@ -158,26 +219,78 @@ class _OpenDeckHomePageState extends State<OpenDeckHomePage> {
 
   void _openScanner() async {
     final device = await ScannerScreen.show(context, bleManager: _bleManager);
-    if (device != null) {
-      final success = await _bleManager.connect(device);
+    if (device == null) return;
+
+    final success = await _bleManager.connect(device);
+    if (!mounted) return;
+
+    if (!success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to connect to target device'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    // ── Check if this device is already bonded ────────────────────────────────
+    final deviceId = device.remoteId.str;
+    final alreadyBonded = widget.bondedRepo.isBonded(deviceId);
+
+    if (alreadyBonded) {
+      // Known device — transition to Ready immediately
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Reconnected to ${device.platformName}'),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+      return;
+    }
+
+    // ── Unknown device — require PIN handshake ────────────────────────────────
+    final deviceName = device.platformName.isNotEmpty
+        ? device.platformName
+        : 'OpenDeck Desktop';
+
+    final authed = await PinEntryScreen.show(
+      context,
+      bleManager: _bleManager,
+      deviceName: deviceName,
+    );
+
+    if (!mounted) return;
+
+    if (authed) {
+      // Persist the bonded device UUID so future connections skip PIN
+      await widget.bondedRepo.saveBondedDevice(BondedDeviceModel(
+        deviceId: deviceId,
+        name: deviceName,
+        secretKey: 'handshake-verified',
+        pairedAt: DateTime.now(),
+      ));
       if (!mounted) return;
-      if (success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Connected to ${device.platformName}'),
-            backgroundColor: const Color(0xFF10B981),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to connect to target device'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Paired with $deviceName — ready!'),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+    } else {
+      // Auth failed or user cancelled — disconnect
+      await _bleManager.disconnect();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pairing cancelled or failed'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
+
+  // ── Widgets ──────────────────────────────────────────────────────────────────
 
   Widget _buildStatusBadge() {
     return StreamBuilder<BleConnectionStatus>(
@@ -185,14 +298,27 @@ class _OpenDeckHomePageState extends State<OpenDeckHomePage> {
       initialData: _bleManager.status,
       builder: (context, snapshot) {
         final status = snapshot.data ?? BleConnectionStatus.disconnected;
-        final color = status == BleConnectionStatus.ready
-            ? const Color(0xFF10B981)
-            : status == BleConnectionStatus.disconnected
-                ? const Color(0xFFEF4444)
-                : const Color(0xFFF59E0B);
+
+        final Color color;
+        final bool showSpinner;
+
+        switch (status) {
+          case BleConnectionStatus.ready:
+            color = const Color(0xFF10B981);
+            showSpinner = false;
+          case BleConnectionStatus.disconnected:
+            color = const Color(0xFFEF4444);
+            showSpinner = false;
+          case BleConnectionStatus.reconnecting:
+            color = const Color(0xFF6366F1);
+            showSpinner = true;
+          default:
+            color = const Color(0xFFF59E0B);
+            showSpinner = true;
+        }
 
         return GestureDetector(
-          onTap: _openScanner,
+          onTap: status == BleConnectionStatus.ready ? null : _openScanner,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
@@ -203,11 +329,21 @@ class _OpenDeckHomePageState extends State<OpenDeckHomePage> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                ),
+                if (showSpinner)
+                  SizedBox(
+                    width: 8,
+                    height: 8,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                  )
+                else
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                  ),
                 const SizedBox(width: 6),
                 Text(
                   status.label,
@@ -264,7 +400,9 @@ class _OpenDeckHomePageState extends State<OpenDeckHomePage> {
         actions: [
           IconButton(
             icon: Icon(
-              _activeProfile.columns == 3 ? Icons.grid_on_rounded : Icons.grid_view_rounded,
+              _activeProfile.columns == 3
+                  ? Icons.grid_on_rounded
+                  : Icons.grid_view_rounded,
               color: const Color(0xFF6366F1),
             ),
             tooltip: 'Toggle 3x3 / 4x4 Grid',

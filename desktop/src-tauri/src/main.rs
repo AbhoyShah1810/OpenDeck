@@ -12,7 +12,10 @@ use tauri::{
     AppHandle, Manager, RunEvent,
 };
 
-use app_lib::ble::server::{create_gatt_server, generate_pairing_pin, BleEvent};
+use app_lib::ble::{
+    schema::{HandshakePayload, TelemetryPayload, SystemMetrics},
+    server::{create_gatt_server, generate_pairing_pin, BleEvent, GattServer},
+};
 
 /// Shared global daemon state accessible across Tauri commands and the tray menu
 #[derive(Debug, Clone)]
@@ -122,6 +125,8 @@ fn start_ble_event_loop(
     mut rx: app_lib::ble::server::BleReceiver,
     shared_state: Arc<Mutex<DaemonState>>,
     whitelist: Arc<app_lib::security::WhitelistManager>,
+    gatt_server: Arc<dyn GattServer>,
+    app_handle: AppHandle,
 ) {
     tokio::spawn(async move {
         log::info!("[BLE] Event loop started.");
@@ -139,7 +144,10 @@ fn start_ble_event_loop(
                         log::info!("[Security] Client '{}' is in whitelist — transition to Ready.", client_id);
                         state.connection_status = ConnectionStatus::Ready;
                     } else {
-                        log::info!("[Security] Client '{}' is unbonded — requires PIN handshake.", client_id);
+                        log::info!("[Security] Client '{}' is unbonded — requires PIN handshake. PIN={}",
+                            client_id,
+                            state.pairing_pin.as_deref().unwrap_or("N/A")
+                        );
                         state.connection_status = ConnectionStatus::Pairing;
                     }
                     state.paired_device_id = Some(client_id);
@@ -148,33 +156,80 @@ fn start_ble_event_loop(
                     log::info!("[BLE] Client disconnected: {}", client_id);
                     state.connection_status = ConnectionStatus::Advertising;
                     state.paired_device_id  = None;
+                    // Rotate PIN on every disconnect for security
                     state.pairing_pin = Some(generate_pairing_pin());
                 }
                 BleEvent::AuthReceived { raw } => {
-                    log::info!("[BLE] Auth payload received ({} bytes) — verifying...", raw.len());
-                    if let Ok(handshake) = rmp_serde::from_slice::<app_lib::ble::schema::HandshakePayload>(&raw) {
-                        // Store paired client in whitelist
-                        let device = app_lib::security::BondedDevice {
-                            client_id: handshake.client_id.clone(),
-                            device_name: format!("Mobile Device ({})", handshake.client_id),
-                            shared_secret: handshake.auth_code,
-                            paired_at: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs())
-                                .unwrap_or(0),
-                        };
-                        if let Err(e) = whitelist.add_bonded_device(device) {
-                            log::error!("[Security] Failed to save bonded device: {}", e);
+                    log::info!("[BLE] Auth payload received ({} bytes) — verifying PIN...", raw.len());
+
+                    let current_pin = state.pairing_pin.clone().unwrap_or_default();
+
+                    if let Ok(handshake) = rmp_serde::from_slice::<HandshakePayload>(&raw) {
+                        let pin_matches = handshake.auth_code.trim() == current_pin.trim();
+
+                        if pin_matches {
+                            log::info!("[Security] ✅ PIN verified for client '{}'. Bonding.", handshake.client_id);
+
+                            let device = app_lib::security::BondedDevice {
+                                client_id: handshake.client_id.clone(),
+                                device_name: format!("Mobile Device ({})", &handshake.client_id[..handshake.client_id.len().min(12)]),
+                                shared_secret: handshake.auth_code.clone(),
+                                paired_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0),
+                            };
+
+                            if let Err(e) = whitelist.add_bonded_device(device) {
+                                log::error!("[Security] Failed to save bonded device: {}", e);
+                            } else {
+                                log::info!("[Security] Device '{}' saved to whitelist.", handshake.client_id);
+                            }
+
+                            state.connection_status = ConnectionStatus::Ready;
+                            state.pairing_pin = None; // Clear PIN display once paired
+
+                            // Notify mobile: AUTH OK
+                            let auth_ok = TelemetryPayload {
+                                status: "AUTH_OK".to_string(),
+                                active_app: String::new(),
+                                metrics: SystemMetrics { cpu: 0.0, ram: 0.0, mic_muted: false, audio_playing: false },
+                            };
+                            if let Ok(bytes) = rmp_serde::to_vec_named(&auth_ok) {
+                                if let Err(e) = gatt_server.notify_telemetry(bytes) {
+                                    log::warn!("[BLE] Failed to send AUTH_OK telemetry: {}", e);
+                                }
+                            }
                         } else {
-                            log::info!("[Security] Successfully bonded device '{}'", handshake.client_id);
+                            log::warn!(
+                                "[Security] ❌ PIN mismatch for '{}': expected='{}' got='{}'",
+                                handshake.client_id, current_pin, handshake.auth_code
+                            );
+
+                            // Rotate PIN immediately after a failed attempt
+                            state.pairing_pin = Some(generate_pairing_pin());
+                            log::info!("[Security] New PIN generated: {}", state.pairing_pin.as_deref().unwrap_or("?"));
+
+                            // Notify mobile: AUTH FAILED
+                            let auth_fail = TelemetryPayload {
+                                status: "AUTH_FAIL".to_string(),
+                                active_app: String::new(),
+                                metrics: SystemMetrics { cpu: 0.0, ram: 0.0, mic_muted: false, audio_playing: false },
+                            };
+                            if let Ok(bytes) = rmp_serde::to_vec_named(&auth_fail) {
+                                if let Err(e) = gatt_server.notify_telemetry(bytes) {
+                                    log::warn!("[BLE] Failed to send AUTH_FAIL telemetry: {}", e);
+                                }
+                            }
                         }
+                    } else {
+                        log::error!("[BLE] Failed to deserialize HandshakePayload — dropping auth packet.");
+                        state.pairing_pin = Some(generate_pairing_pin());
                     }
-                    state.connection_status = ConnectionStatus::Ready;
                 }
                 BleEvent::CommandReceived { raw } => {
                     log::debug!("[BLE] Command payload received ({} bytes)", raw.len());
 
-                    // Security check: reject requests if connection is not Ready or client is unbonded
                     let is_authorised = state.connection_status == ConnectionStatus::Ready
                         || state.paired_device_id.as_ref().map_or(false, |id| whitelist.is_bonded(id));
 
@@ -203,6 +258,16 @@ fn start_ble_event_loop(
                     state.connection_status = ConnectionStatus::Disconnected;
                 }
             }
+
+            // Rebuild tray menu to reflect latest state on every event
+            let state_snapshot = state.clone();
+            drop(state); // release lock before UI work
+            let handle = app_handle.clone();
+            if let Ok(tray_menu) = build_tray_menu(&handle, &state_snapshot) {
+                if let Some(tray) = handle.tray_by_id("main") {
+                    let _ = tray.set_menu(Some(tray_menu));
+                }
+            }
         }
     });
 }
@@ -228,7 +293,7 @@ fn main() {
             let state_snapshot = state_for_setup.lock().unwrap().clone();
             let tray_menu = build_tray_menu(app.handle(), &state_snapshot)?;
 
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("OpenDeck — Macro Controller")
                 .menu(&tray_menu)
@@ -265,7 +330,7 @@ fn main() {
             let (gatt_server, ble_rx) = create_gatt_server();
 
             // Spin up the event loop BEFORE starting the server
-            start_ble_event_loop(ble_rx, state_for_ble, whitelist);
+            start_ble_event_loop(ble_rx, state_for_ble, whitelist, gatt_server.clone(), app.handle().clone());
 
             // Start advertising (non-blocking: CoreBluetooth uses delegate callbacks)
             if let Err(e) = gatt_server.start() {

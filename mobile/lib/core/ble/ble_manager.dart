@@ -24,6 +24,8 @@ enum BleConnectionStatus {
   connecting,
   pairing,
   ready,
+  // Transient state shown during silent background reconnect attempts
+  reconnecting,
 }
 
 extension BleConnectionStatusExtension on BleConnectionStatus {
@@ -39,11 +41,17 @@ extension BleConnectionStatusExtension on BleConnectionStatus {
         return 'Pairing...';
       case BleConnectionStatus.ready:
         return 'Ready';
+      case BleConnectionStatus.reconnecting:
+        return 'Reconnecting...';
     }
   }
 }
 
 /// Low-Latency BLE Central Connection Manager for OpenDeck
+///
+/// Lifecycle:
+///   DISCONNECTED → CONNECTING → PAIRING → READY
+///   READY → [link drop] → RECONNECTING → CONNECTING → READY
 class BleManager {
   BluetoothDevice? _connectedDevice;
   BluetoothCharacteristic? _commandCharacteristic;
@@ -54,6 +62,22 @@ class BleManager {
   StreamSubscription<BluetoothConnectionState>? _connectionStateSubscription;
   StreamSubscription<List<int>>? _telemetryNotificationSubscription;
 
+  // ── Heartbeat state ─────────────────────────────────────────────────────────
+  Timer? _heartbeatTimer;
+  int _heartbeatFailures = 0;
+  static const int _maxHeartbeatFailures = 3;
+
+  // ── Reconnect state ─────────────────────────────────────────────────────────
+  // Saved after every successful connection so drops can reconnect directly.
+  String? _savedDeviceId;
+  bool _reconnectEnabled = false;
+  bool _isReconnecting = false;
+  Timer? _reconnectBackoffTimer;
+  static const Duration _reconnectInitialDelay = Duration(seconds: 2);
+  static const Duration _reconnectMaxDelay = Duration(seconds: 30);
+  Duration _reconnectDelay = _reconnectInitialDelay;
+
+  // ── Stream controllers ──────────────────────────────────────────────────────
   final _statusController = StreamController<BleConnectionStatus>.broadcast();
   final _telemetryController = StreamController<TelemetryPayload>.broadcast();
 
@@ -64,10 +88,15 @@ class BleManager {
   Stream<TelemetryPayload> get telemetryStream => _telemetryController.stream;
   BluetoothDevice? get connectedDevice => _connectedDevice;
 
+  /// The remote device ID of the most recently connected peripheral.
+  String? get savedDeviceId => _savedDeviceId;
+
   void _updateStatus(BleConnectionStatus newStatus) {
     _currentStatus = newStatus;
     _statusController.add(newStatus);
   }
+
+  // ── Public API ───────────────────────────────────────────────────────────────
 
   /// Scan for OpenDeck peripheral servers in physical range
   Future<void> startScan({
@@ -86,7 +115,6 @@ class BleManager {
             ? r.advertisementData.advName
             : (r.device.platformName.isNotEmpty ? r.device.platformName : 'OpenDeck Host');
 
-        // Match service UUID
         if (r.advertisementData.serviceUuids.contains(BleUuids.serviceGuid) ||
             name.toLowerCase().contains('opendeck')) {
           onDeviceDiscovered(r.device, name);
@@ -109,11 +137,14 @@ class BleManager {
     }
   }
 
-  /// Connect to OpenDeck peripheral with sub-15ms latency optimizations
-  Future<bool> connect(BluetoothDevice device) async {
+  /// Connect to OpenDeck peripheral with sub-15ms latency optimizations.
+  /// Saves [device.remoteId] for future direct reconnects.
+  Future<bool> connect(BluetoothDevice device, {bool enableReconnect = true}) async {
     try {
       _updateStatus(BleConnectionStatus.connecting);
       _connectedDevice = device;
+      _reconnectEnabled = enableReconnect;
+      if (enableReconnect) _savedDeviceId = device.remoteId.str;
 
       // Listen for connection state changes
       _connectionStateSubscription?.cancel();
@@ -168,12 +199,13 @@ class BleManager {
       if (_telemetryCharacteristic != null) {
         await _telemetryCharacteristic!.setNotifyValue(true);
         _telemetryNotificationSubscription?.cancel();
-        _telemetryNotificationSubscription = _telemetryCharacteristic!.onValueReceived.listen((value) {
+        _telemetryNotificationSubscription =
+            _telemetryCharacteristic!.onValueReceived.listen((value) {
           if (value.isNotEmpty) {
             try {
               final payload = TelemetryPayload.deserialize(Uint8List.fromList(value));
               _telemetryController.add(payload);
-            } catch (e) {
+            } catch (_) {
               // Soft error on parse
             }
           }
@@ -181,9 +213,30 @@ class BleManager {
       }
 
       _updateStatus(BleConnectionStatus.ready);
+
+      // Reset reconnect backoff on successful connect
+      _reconnectDelay = _reconnectInitialDelay;
+      _heartbeatFailures = 0;
+      _isReconnecting = false;
+
+      // Start the keep-alive heartbeat
+      _startHeartbeat();
+
       return true;
     } catch (e) {
       _handleDisconnected();
+      return false;
+    }
+  }
+
+  /// Directly connect to a known peripheral by its Bluetooth MAC / UUID string.
+  /// Bypasses BLE scanning entirely — used for startup auto-reconnect.
+  Future<bool> connectByDeviceId(String deviceId) async {
+    try {
+      final device = BluetoothDevice.fromId(deviceId);
+      return await connect(device, enableReconnect: true);
+    } catch (e) {
+      _updateStatus(BleConnectionStatus.disconnected);
       return false;
     }
   }
@@ -216,25 +269,114 @@ class BleManager {
     );
   }
 
-  /// Clean disconnect
+  /// Clean manual disconnect — suppresses auto-reconnect
   Future<void> disconnect() async {
+    _reconnectEnabled = false;
+    _stopHeartbeat();
+    _reconnectBackoffTimer?.cancel();
+    _isReconnecting = false;
     if (_connectedDevice != null) {
       await _connectedDevice!.disconnect();
     }
-    _handleDisconnected();
+    _handleDisconnectedClean();
   }
 
+  // ── Heartbeat engine ─────────────────────────────────────────────────────────
+
+  /// Starts a 5-second periodic keep-alive ping written to the command
+  /// characteristic. Three consecutive failures triggers a silent reconnect.
+  void _startHeartbeat() {
+    _stopHeartbeat();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (_currentStatus != BleConnectionStatus.ready) return;
+      if (_commandCharacteristic == null) return;
+
+      try {
+        // Zero-byte WriteWithoutResponse — negligible overhead, sub-1ms
+        await _commandCharacteristic!.write(
+          Uint8List(0),
+          withoutResponse: true,
+        );
+        _heartbeatFailures = 0; // reset on success
+      } catch (_) {
+        _heartbeatFailures++;
+        if (_heartbeatFailures >= _maxHeartbeatFailures) {
+          // Link is dead — kick off reconnect
+          _handleDisconnected();
+        }
+      }
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _heartbeatFailures = 0;
+  }
+
+  // ── Reconnect engine ─────────────────────────────────────────────────────────
+
+  /// Called on every unexpected disconnect. If [_reconnectEnabled] and
+  /// [_savedDeviceId] are set, schedules a direct reconnect attempt using
+  /// exponential backoff capped at 30 seconds.
   void _handleDisconnected() {
+    _stopHeartbeat();
+    _clearCharacteristics();
+
+    if (_reconnectEnabled && _savedDeviceId != null && !_isReconnecting) {
+      _isReconnecting = true;
+      _updateStatus(BleConnectionStatus.reconnecting);
+      _scheduleReconnect();
+    } else {
+      _connectedDevice = null;
+      _updateStatus(BleConnectionStatus.disconnected);
+    }
+  }
+
+  void _scheduleReconnect() {
+    _reconnectBackoffTimer?.cancel();
+    _reconnectBackoffTimer = Timer(_reconnectDelay, () async {
+      if (!_reconnectEnabled || _savedDeviceId == null) {
+        _isReconnecting = false;
+        _connectedDevice = null;
+        _updateStatus(BleConnectionStatus.disconnected);
+        return;
+      }
+
+      final success = await connectByDeviceId(_savedDeviceId!);
+      if (!success) {
+        // Exponential backoff: double the delay up to max
+        _reconnectDelay = Duration(
+          seconds: (_reconnectDelay.inSeconds * 2).clamp(
+            _reconnectInitialDelay.inSeconds,
+            _reconnectMaxDelay.inSeconds,
+          ),
+        );
+        _scheduleReconnect(); // retry again after new delay
+      }
+      // On success, connect() clears _isReconnecting and resets _reconnectDelay
+    });
+  }
+
+  /// Called only on clean manual disconnect — does not trigger reconnect
+  void _handleDisconnectedClean() {
+    _clearCharacteristics();
+    _connectedDevice = null;
+    _updateStatus(BleConnectionStatus.disconnected);
+  }
+
+  void _clearCharacteristics() {
     _telemetryNotificationSubscription?.cancel();
     _connectionStateSubscription?.cancel();
     _commandCharacteristic = null;
     _telemetryCharacteristic = null;
     _authCharacteristic = null;
-    _connectedDevice = null;
-    _updateStatus(BleConnectionStatus.disconnected);
   }
 
   void dispose() {
+    _stopHeartbeat();
+    _reconnectBackoffTimer?.cancel();
+    _reconnectEnabled = false;
     disconnect();
     _statusController.close();
     _telemetryController.close();
