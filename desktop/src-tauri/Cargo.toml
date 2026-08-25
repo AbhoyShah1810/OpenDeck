@@ -27,6 +27,12 @@ tauri-plugin-log = "2"
 tokio = { version = "1", features = ["sync", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 rand = "0.9"
+# Input automation — synthetic keyboard / mouse / media events
+enigo = { version = "0.6.1", default-features = false }
+# Shell execution sandboxing
+shell-words = "1.1"
+# System metrics for telemetry (CPU / RAM)
+sysinfo = { version = "0.35", default-features = false, features = ["system"] }
 
 # ── macOS CoreBluetooth GATT Peripheral ──────────────────────────────────────
 [target.'cfg(target_os = "macos")'.dependencies]

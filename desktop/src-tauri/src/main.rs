@@ -144,7 +144,16 @@ fn start_ble_event_loop(
                 }
                 BleEvent::CommandReceived { raw } => {
                     log::debug!("[BLE] Command payload received ({} bytes)", raw.len());
-                    // TODO Phase 4: Dispatch to engine::keyboard
+                    match rmp_serde::from_slice::<app_lib::ble::schema::ActionPayload>(&raw) {
+                        Ok(action) => {
+                            if let Err(e) = app_lib::engine::dispatcher::dispatch_action(&action) {
+                                log::error!("[BLE] Action dispatch failed: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("[BLE] Failed to deserialize ActionPayload: {}", e);
+                        }
+                    }
                 }
                 BleEvent::Error { reason } => {
                     log::error!("[BLE] Error: {}", reason);

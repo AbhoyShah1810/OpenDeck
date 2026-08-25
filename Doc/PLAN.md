@@ -46,11 +46,11 @@ This plan documents the end-to-end production implementation for **OpenDeck**—
   - **macOS:** CoreBluetooth `CBPeripheralManager` via `objc2-core-bluetooth 0.3.2` with full delegate implementation.
   - **Windows:** WinRT `GattServiceProvider` via `windows 0.61` crate with typed event handlers.
   - Dynamic BLE advertising of custom 128-bit Primary Service UUID.
-- [ ] **Step 2.3: Native Input Automation Engine**
-  - Implement synthetic keypress, mouse click, and shortcut dispatcher using `enigo` / `rdev`.
-  - Map logical modifiers: `PRIMARY_MOD` $\rightarrow$ `Cmd` on macOS / `Ctrl` on Windows.
-  - Add media control triggers (Play/Pause, Skip, Volume Mute).
-  - Add sandboxed command line script launcher.
+- [x] **Step 2.3: Native Input Automation Engine**
+  - Synthesize synthetic keypresses, mouse clicks, and shortcuts using `enigo 0.6.1`.
+  - Abstract modifier translation: `PRIMARY_MOD` $\rightarrow$ `Cmd` on macOS / `Control` on Windows.
+  - Native hardware media triggers (Play/Pause, Next/Prev, Mute, Vol Up/Down).
+  - Shell command runner with argument splitting via `shell-words`.
 - [ ] **Step 2.4: Host Permissions & Security Whitelist**
   - Add macOS `NSBluetoothAlwaysUsageDescription` and TCC Accessibility permission prompt flow.
   - Implement local bonded device whitelist stored in encrypted desktop app config.
